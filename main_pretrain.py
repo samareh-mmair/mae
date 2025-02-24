@@ -29,6 +29,7 @@ import timm.optim.optim_factory as optim_factory
 
 import util.misc as misc
 from util.misc import NativeScalerWithGradNormCount as NativeScaler
+from util.segmentation_dataset import SegmentationDataset
 
 import models_mae
 
@@ -72,7 +73,7 @@ def get_args_parser():
                         help='epochs to warmup LR')
 
     # Dataset parameters
-    parser.add_argument('--data_path', default='/datasets01/imagenet_full_size/061417/', type=str,
+    parser.add_argument('--data_path', default='/air2/scratch/samareh/keypoints/data/images/', type=str,
                         help='dataset path')
 
     parser.add_argument('--output_dir', default='./output_dir',
@@ -103,6 +104,14 @@ def get_args_parser():
 
     return parser
 
+def prepare_model(chkpt_dir, arch='mae_vit_large_patch16'):
+    # build model
+    model = getattr(models_mae, arch)()
+    # load model
+    checkpoint = torch.load(chkpt_dir, map_location='cpu')
+    msg = model.load_state_dict(checkpoint['model'], strict=False)
+    print(msg)
+    return model
 
 def main(args):
     misc.init_distributed_mode(args)
@@ -125,24 +134,25 @@ def main(args):
             transforms.RandomHorizontalFlip(),
             transforms.ToTensor(),
             transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])])
-    dataset_train = datasets.ImageFolder(os.path.join(args.data_path, 'train'), transform=transform_train)
+    # dataset_train = datasets.ImageFolder(os.path.join(args.data_path, 'training'), transform=transform_train)
+    dataset_train = SegmentationDataset(os.path.join(args.data_path, 'training'), transform=transform_train)
     print(dataset_train)
 
-    if True:  # args.distributed:
-        num_tasks = misc.get_world_size()
-        global_rank = misc.get_rank()
-        sampler_train = torch.utils.data.DistributedSampler(
-            dataset_train, num_replicas=num_tasks, rank=global_rank, shuffle=True
-        )
-        print("Sampler_train = %s" % str(sampler_train))
-    else:
-        sampler_train = torch.utils.data.RandomSampler(dataset_train)
+    # if True:  # args.distributed:
+    #     num_tasks = misc.get_world_size()
+    #     global_rank = misc.get_rank()
+    #     sampler_train = torch.utils.data.DistributedSampler(
+    #         dataset_train, num_replicas=num_tasks, rank=global_rank, shuffle=True
+    #     )
+    #     print("Sampler_train = %s" % str(sampler_train))
+    # else:
+    sampler_train = torch.utils.data.RandomSampler(dataset_train)
 
-    if global_rank == 0 and args.log_dir is not None:
-        os.makedirs(args.log_dir, exist_ok=True)
-        log_writer = SummaryWriter(log_dir=args.log_dir)
-    else:
-        log_writer = None
+    # if global_rank == 0 and args.log_dir is not None:
+    #     os.makedirs(args.log_dir, exist_ok=True)
+    #     log_writer = SummaryWriter(log_dir=args.log_dir)
+    # else:
+    log_writer = None
 
     data_loader_train = torch.utils.data.DataLoader(
         dataset_train, sampler=sampler_train,
@@ -154,7 +164,7 @@ def main(args):
     
     # define the model
     model = models_mae.__dict__[args.model](norm_pix_loss=args.norm_pix_loss)
-
+    model = prepare_model('mae_visualize_vit_large_ganloss.pth')
     model.to(device)
 
     model_without_ddp = model
@@ -171,9 +181,9 @@ def main(args):
     print("accumulate grad iterations: %d" % args.accum_iter)
     print("effective batch size: %d" % eff_batch_size)
 
-    if args.distributed:
-        model = torch.nn.parallel.DistributedDataParallel(model, device_ids=[args.gpu], find_unused_parameters=True)
-        model_without_ddp = model.module
+    # if args.distributed:
+    #     model = torch.nn.parallel.DistributedDataParallel(model, device_ids=[args.gpu], find_unused_parameters=True)
+    #     model_without_ddp = model.module
     
     # following timm: set wd as 0 for bias and norm layers
     param_groups = optim_factory.add_weight_decay(model_without_ddp, args.weight_decay)
